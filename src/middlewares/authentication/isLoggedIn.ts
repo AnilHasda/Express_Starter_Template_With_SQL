@@ -3,8 +3,9 @@ import jwt from "jsonwebtoken";
 import ResponseConfig from "../../helpers/responseConfig";
 import ErrorConfig from "../../helpers/errorConfig";
 import asyncHandler from "../../helpers/asyncHandler";
-import user from "../../models/authModel";
+import {User} from "../../entities/user.entity";
 import generateToken from "../../utils/generateToken";
+
 const isLoggedIn=asyncHandler(async(req:Request,res:Response,next:NextFunction)=>{
   const access_token=req?.cookies?.access_token?.split(" ")[1];
   const refresh_token=req?.cookies?.refresh_token?.split(" ")[1];
@@ -15,7 +16,7 @@ const isLoggedIn=asyncHandler(async(req:Request,res:Response,next:NextFunction)=
     console.log("refresh token available & access_token unavailable")
     let verifyRefreshToken=await jwt.verify(refresh_token,process.env.REFRESH_TOKEN_SECRET as string);
     if(verifyRefreshToken){
-    let findUserByToken=await user.findOne({refresh_token}).select("-password");
+    let findUserByToken=await User.findOne({where:{refresh_token}});
     if(!findUserByToken) throw new ErrorConfig(401,"unauthorized access");
     let payload={email:findUserByToken.email} as {email:string};
     let access_token_secret=process.env.ACCESS_TOKEN_SECRET as string;
@@ -44,4 +45,5 @@ const isLoggedIn=asyncHandler(async(req:Request,res:Response,next:NextFunction)=
     }
   }
 });
+
 export {isLoggedIn};

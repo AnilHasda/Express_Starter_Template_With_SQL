@@ -1,30 +1,37 @@
 import asyncHandler from "../../helpers/asyncHandler";
+
 import ErrorConfig from "../../helpers/errorConfig";
+
 import ResponseConfig from "../../helpers/responseConfig";
+
 import generateToken from "../../utils/generateToken";
-import user from "../../models/authModel";
+
 import {UserSchema as UserData} from "../../@types/userSchema.types";
 import bcrypt from "bcryptjs";
 import generateOtp from "../../utils/generateOtp";
+
 import generateOtpExpirationTime from  "../../utils/generateOtp";
+
 import uploadImageIntoCloudinary from "../../services/cloudinary.service";
+
 import path from "path";
 import ejs from "ejs";
+
 import sendEmail from "../../services/email";
-import mongoose from "mongoose";
+
+import {User} from "../../entities/user.entity";
+import hashedData from "../../utils/hashData";
+
 const test=asyncHandler(async(req,res,next)=>{
   let bool:boolean=true;
   if(bool){
     let response=new ResponseConfig(200,"this is test message");
     return res.json(response);
   }
-    next(new ErrorConfig(401,"You are not authonticate"));
+    next(new ErrorConfig(401,"You are not authenticate"));
   // next(new Error())
 });
-const deleteUserModle=asyncHandler(async(req,res,next)=>{
-  delete mongoose.models["users"];
-  res.json(new ResponseConfig(200,"uset model deleted successfully"));
-})
+
 const userRegistration=asyncHandler(async(req,res,next)=>{
   let userData:UserData=req.body;
   let userDataValues:string[]=Object.values(userData);
@@ -32,14 +39,16 @@ const userRegistration=asyncHandler(async(req,res,next)=>{
   let inserData;
   let profileImage:Express.Multer.File | undefined=req.file;
   if(profileImage){
-    uploadProfile=await uploadImageIntoCloudinary(profileImage?.path,"authontication/profile");
+    uploadProfile=await uploadImageIntoCloudinary(profileImage?.path,"authentication/profile");
     console.log({profileImage});
   }
-  if(Object.keys(userData).includes("profile") && !profileImage) delete userData?.profile;
+  if(Object.keys(userData).includes("profile") && !profileImage){
+    delete userData?.profile;
+  }
   if(userDataValues.some(value=>(value===null || value===undefined || value===" "))){
     return next(new ErrorConfig(400,"All fields are required"));
   }
-  let isUserAlreadyExist=await user.findOne({email:userData?.email});
+  let isUserAlreadyExist=await User.findOne({where:{email:userData?.email}});
   if(isUserAlreadyExist){
     console.log({isUserAlreadyExist})
     return next(new ErrorConfig(400,"user already exist"));
@@ -52,22 +61,28 @@ const userRegistration=asyncHandler(async(req,res,next)=>{
   let refresh_token_cookie_expiration_time=Number(process.env.REFRESH_TOKEN_COOKIE_EXPIRATION_TIME);
   let payload={email:userData?.email,password:userData?.password};
   let refresh_token=await generateToken(refresh_token_secret,Number(refresh_token_expiration_time),payload);
+  
+  //generate otp
   let otp=generateOtp();
-  let hashedOTP=await bcrypt.hash(otp,10);
+  let hashedOTP=await hashedData(otp,10);
   let otpExpiresAt=generateOtpExpirationTime();
+  
+  //generate hashed password
+  const hashedPassword=await hashedData(userData.password,10);
+  userData.password=hashedPassword;
   console.log({otp,otpExpiresAt});
   if(req.file && uploadProfile){
-    inserData=await user.create({...userData,
+    inserData=await User.insert({...userData,
     profile:uploadProfile.url,
     refresh_token,
     otp:hashedOTP,
-    otpExpiresAt
+    otp_expires_at:otpExpiresAt
     });
   }else{
-  inserData=await user.create({...userData,
+  inserData=await User.insert({...userData,
   refresh_token,
   otp:hashedOTP,
-  otpExpiresAt
+  otp_expires_at:otpExpiresAt
   });
   }
   if(inserData){
@@ -77,7 +92,7 @@ const userRegistration=asyncHandler(async(req,res,next)=>{
       otpCode:string | number;
     }
      let data:Data={
-       user:userData.fname,
+       user:userData.first_name,
        otpCode:otp
     }
     ejs.renderFile(templatePath,{data},async function (err,htmlTemplate){
@@ -103,6 +118,7 @@ const userRegistration=asyncHandler(async(req,res,next)=>{
   }
   next(new ErrorConfig(400,"Failed to create account"));
 });
+
 const login=asyncHandler(async(req,res,next)=>{
   interface UserData{
     email?:string;
@@ -115,8 +131,8 @@ const login=asyncHandler(async(req,res,next)=>{
     return next(new ErrorConfig(400,"All fields are required"));
   }
   let {email,password}=userData;
-  let verifyEmail=await user.findOne({email})
-  if(verifyEmail?.isVerified===false) return next(new ErrorConfig(400,"please verify your account"));
+  let verifyEmail=await User.findOne({where:{email}})
+  if(verifyEmail?.is_verified===false) return next(new ErrorConfig(400,"please verify your account"));
   if(!verifyEmail) return next(new ErrorConfig(400,"Email or password doesn't match !!"));
   if(verifyEmail){
     let verifyPassword=await bcrypt.compare(password as string,verifyEmail.password);
@@ -145,42 +161,50 @@ const login=asyncHandler(async(req,res,next)=>{
   }
   next(new ErrorConfig(400,"Failed to logged in!!"));
 })
+
  const loggedOut=asyncHandler(async(req,res,next)=>{
   res.clearCookie("access_token");
   res.clearCookie("refresh_token");
   res.json(new ResponseConfig(200,"user logged out"));
 })
+
 const profileUpdate=asyncHandler(async(req,res,next)=>{
   let email=req.email as string;
   let updateId=req.params.id as string | number;
   let updatePayload=req.body;
-  const isUserExist=await user.findOne({email});
+  const isUserExist=await User.findOne({where:{email}});
   if(!isUserExist) return next(new ErrorConfig(401,"unauthorized access !!"));
-  let updateUser=await user.findByIdAndUpdate(updateId,updatePayload);
+  if(updatePayload.password){
+    const hashedPassword=await hashedData(updatePayload.password,10);
+    updatePayload.password=hashedPassword;
+  }
+  let updateUser=await User.update(updateId,updatePayload);
   if(updateUser) return res.status(202).json(new ResponseConfig(202,"updated successfully"));
   next(new ErrorConfig(500,"failed to update profile !!"));
 })
+
 const getAllUsers=asyncHandler(async(req,res,next)=>{
-  let getUsers=await user.find({});
+  let getUsers=await User.find();
   res.json(new ResponseConfig(200,null,getUsers));
 })
+
 const verifyOtp=asyncHandler(async(req,res,next)=>{
   let {email}=req.body;
-  let findUser=await user.findOne({email});
+  let findUser=await User.findOne({where:{email}});
   if(!findUser) return next(new ErrorConfig(401,"unauthorized access"));
   let verifyOtpCode=await bcrypt.compare(req.params.otpCode,findUser.otp as string);
-  if(!verifyOtpCode || !findUser.otpExpiresAt) return next(new ErrorConfig(401,"Invalid code"));
-  let isOtpValid=new Date<findUser.otpExpiresAt;
-  console.log({now:new Date,otpExpires:findUser.otpExpiresAt})
+  if(!verifyOtpCode || !findUser.otp_expires_at) return next(new ErrorConfig(401,"Invalid code"));
+  let isOtpValid=new Date<findUser.otp_expires_at;
+  console.log({now:new Date,otpExpires:findUser.otp_expires_at})
   if(!isOtpValid) return next(new ErrorConfig(401,"OTP expires"));
-  let verifyAccount=await user.updateOne({otp:req.params.otpCode},{$set:{...findUser,otp:undefined,otpExpiresAt:undefined,isVerified:true}});
+  let verifyAccount=await User.update({otp:req.params.otpCode},{otp:undefined,otp_expires_at:undefined,is_verified:true});
   if(verifyAccount){
     let templatePath=path.join(__dirname,"../../../views/welcomeEmailTemplate.ejs");
     type Data={
       user:string;
     }
      let data:Data={
-       user:findUser.fname//findOtp contain user data
+       user:findUser.first_name//findOtp contain user data
     }
     ejs.renderFile(templatePath,{data},async function (err,htmlTemplate){
     if(err){
@@ -191,21 +215,22 @@ const verifyOtp=asyncHandler(async(req,res,next)=>{
     })
   }
 })
+
 const sendOtpAgain=asyncHandler(async(req,res,next)=>{
   const {email}=req.body;
-  const userExist=await user.findOne({email,isVerified:false});
+  const userExist=await User.findOne({where:{email,is_verified:false}});
   if(!userExist) return next(new ErrorConfig(400,"Sorry you can't use this service"));
   let otp=generateOtp();
-  let hashedOTP=await bcrypt.hash(otp,10);
+  let hashedOTP=await hashedData(otp,10);
   let otpExpiresAt=generateOtpExpirationTime();
   console.log({hashedOTP,otpExpiresAt})
-  const updateOtp=await user.updateOne(
+  const updateOtp=await User.update(
     {email},
-    {$set:{
+    {
       otp:hashedOTP,
-      otpExpiresAt
-    }})
-    if(updateOtp?.modifiedCount===0) return next(new ErrorConfig(500,"failed to update OTP"));
+      otp_expires_at:otpExpiresAt
+    })
+    if(!updateOtp) return next(new ErrorConfig(500,"failed to update OTP"));
     console.log({updateOtp})
   let templatePath=path.join(__dirname,"../../../views/verificationEmailTemplate.ejs");
     type Data={
@@ -213,7 +238,7 @@ const sendOtpAgain=asyncHandler(async(req,res,next)=>{
       otpCode:string | number;
     }
      let data:Data={
-       user:userExist.fname,//userExist contain user data
+       user:userExist.first_name,//userExist contain user data
        otpCode:otp
     }
     ejs.renderFile(templatePath,{data},async function (err,htmlTemplate){
@@ -225,6 +250,7 @@ const sendOtpAgain=asyncHandler(async(req,res,next)=>{
     })
     res.json(new ResponseConfig(200,"OTP sent"));
 })
+
 export{
   test,
   userRegistration,
@@ -232,7 +258,6 @@ export{
   loggedOut,
   profileUpdate,
   getAllUsers,
-  deleteUserModle,
   verifyOtp,
   sendOtpAgain
 }

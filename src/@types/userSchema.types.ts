@@ -1,12 +1,13 @@
+import {UserRole} from "../@types/userRole.type";
 export interface UserSchema{
-  fname:string;
-  lname:string;
+  first_name:string;
+  last_name:string;
   email:string;
   password:string;
   profile?:string;
   refresh_token:string;
-  role:string;
+  role:userRole;
   otp?:string;
-  otpExpiresAt?:Date;
-  isVerified:boolean;
+  otp_expires_at?:Date;
+  is_verified:boolean;
 }
